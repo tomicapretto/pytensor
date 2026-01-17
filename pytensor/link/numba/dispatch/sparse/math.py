@@ -1,6 +1,9 @@
+import numpy as np
+
 from pytensor.link.numba.dispatch import basic as numba_basic
 from pytensor.link.numba.dispatch.basic import register_funcify_default_op_cache_key
 from pytensor.sparse import SparseDenseMultiply, SparseDenseVectorMultiply
+from pytensor.sparse import Dot, StructuredDot
 
 
 @register_funcify_default_op_cache_key(SparseDenseMultiply)
@@ -72,6 +75,7 @@ def numba_funcify_SparseDenseMultiply(op, node, **kwargs):
             indices = x.indices
             indptr = x.indptr
             z_data = z.data
+
             if format == "csc":
                 for j in range(0, N):
                     for i_idx in range(indptr[j], indptr[j + 1]):
@@ -84,7 +88,49 @@ def numba_funcify_SparseDenseMultiply(op, node, **kwargs):
                     for j_idx in range(indptr[i], indptr[i + 1]):
                         j = indices[j_idx]
                         z_data[j_idx] *= y[i, j]
-
+            # breakpoint()
             return z
 
         return sparse_dense_multiply
+
+
+@register_funcify_default_op_cache_key(Dot)
+def numba_funcify_SparseDenseDot(op, node, **kwargs):
+    x, y = node.inputs
+    [z] = node.outputs
+    sparse_format = x.type.format
+    out_dtype = z.type.dtype
+
+    # (n, p) @ (p, k) -> (n, k)
+    @numba_basic.numba_njit
+    def sparse_dense_dot(x, y):
+        assert x.shape[1] == y.shape[0]
+        n = x.shape[0]
+        k = y.shape[1]
+        z = np.zeros((n, k), dtype=out_dtype)
+
+        indices = x.indices
+        indptr = x.indptr
+        data = x.data
+
+        if sparse_format == "csc":
+            p = x.shape[1]
+            for col_idx in range(p):
+                col_start = indptr[col_idx]
+                col_end = indptr[col_idx + 1]
+
+                for idx in range(col_start, col_end):
+                    row_idx = indices[idx]
+                    value = data[idx]
+                    z[row_idx, :] += value * y[col_idx, :]
+        else:
+            for row_idx in range(n):
+                row_start = indptr[row_idx]
+                row_end = indptr[row_idx + 1]
+                for idx in range(row_start, row_end):
+                    col_idx = indices[idx]
+                    value = data[idx]
+                    z[row_idx, :] += value * y[col_idx, :]
+        return z
+
+    return sparse_dense_dot

@@ -26,3 +26,22 @@ def test_sparse_dense_multiply(y_ndim, format):
         z,
         [x_test, y_test],
     )
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_sparse_dense_dot(format):
+    x_shape = (50, 7)
+    y_shape = (7, 4)
+    x = ps.matrix(format, name="x", shape=x_shape)
+    y = pt.tensor("y", shape=y_shape)
+    z = ps.dot(x, y)
+
+    rng = np.random.default_rng((155, y_shape, format == "csr"))
+    x_test = scipy.sparse.random(*x_shape, density=0.5, format=format, random_state=rng)
+    y_test = rng.normal(size=y_shape)
+
+    compare_numba_and_py_sparse(
+        [x, y],
+        z,
+        [x_test, y_test],
+    )
