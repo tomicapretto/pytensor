@@ -36,6 +36,7 @@ from pytensor.sparse import (
     StructuredDot,
     StructuredDotGradCSC,
     StructuredDotGradCSR,
+    TrueDot,
 )
 
 
@@ -939,6 +940,24 @@ def numba_funcify_SparseDot(op, node, **kwargs):
                 return spmdm_csr(y.T, x.T).T
 
         return dmspm, cache_key
+
+
+@register_funcify_and_cache_key(TrueDot)
+def numba_funcify_TrueDot(op, node, **kwargs):
+    dot, cache_key = numba_funcify_SparseDot(op, node, **kwargs)
+    if psb._is_sparse_variable(node.inputs[1]):
+        return dot, cache_key
+
+    format = node.outputs[0].type.format
+
+    @numba_basic.numba_njit
+    def true_dot_sparse_dense(x, y):
+        dense_result = dot(x, y)
+        if format == "csr":
+            return sp.csr_matrix(dense_result)
+        return sp.csc_matrix(dense_result)
+
+    return true_dot_sparse_dense, cache_key
 
 
 @register_funcify_and_cache_key(StructuredDotGradCSR)

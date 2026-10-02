@@ -14,6 +14,50 @@ pytestmark = pytest.mark.filterwarnings("error")
 DOT_SHAPES = [((20, 11), (11, 4)), ((10, 3), (3, 1)), ((1, 10), (10, 5))]
 
 
+@pytest.mark.parametrize("x_format", ["csr", "csc"])
+@pytest.mark.parametrize("y_format", ["csr", "csc"])
+def test_true_dot_sparse_sparse(x_format, y_format):
+    x = ps.matrix(x_format, name="x")
+    y = ps.matrix(y_format, name="y")
+    rng = np.random.default_rng(208)
+    x_values = rng.integers(-2, 3, size=(13, 9))
+    y_values = rng.integers(-2, 3, size=(9, 7))
+    x_values[rng.random(x_values.shape) < 0.7] = 0
+    y_values[rng.random(y_values.shape) < 0.7] = 0
+    x_test = scipy.sparse.csr_matrix(x_values.astype("float64")).asformat(x_format)
+    y_test = scipy.sparse.csr_matrix(y_values.astype("float64")).asformat(y_format)
+
+    compare_numba_and_py_sparse([x, y], ps.true_dot(x, y), [x_test, y_test])
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+@pytest.mark.parametrize("n_cols", [1, 7])
+@pytest.mark.parametrize("dtype", ["float64", "int32", "complex64"])
+def test_true_dot_sparse_dense(format, n_cols, dtype):
+    x = ps.matrix(format, name="x", dtype=dtype)
+    y = pt.matrix("y", shape=(9, n_cols), dtype=dtype)
+    rng = np.random.default_rng(209)
+    x_values = rng.integers(-2, 3, size=(13, 9))
+    x_values[rng.random(x_values.shape) < 0.7] = 0
+    x_test = scipy.sparse.csr_matrix(x_values.astype(dtype)).asformat(format)
+    y_test = rng.integers(-2, 3, size=(9, n_cols)).astype(dtype)
+
+    compare_numba_and_py_sparse([x, y], ps.true_dot(x, y), [x_test, y_test])
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_true_dot_dense_sparse(format):
+    x = pt.matrix("x")
+    y = ps.matrix(format, name="y")
+    rng = np.random.default_rng(210)
+    x_test = rng.integers(-2, 3, size=(13, 9)).astype("float64")
+    y_values = rng.integers(-2, 3, size=(9, 7))
+    y_values[rng.random(y_values.shape) < 0.7] = 0
+    y_test = scipy.sparse.csr_matrix(y_values.astype("float64")).asformat(format)
+
+    compare_numba_and_py_sparse([x, y], ps.true_dot(x, y), [x_test, y_test])
+
+
 class TestComparisons:
     def _comparison_values(self, format):
         x_dense = np.zeros((11, 7))
