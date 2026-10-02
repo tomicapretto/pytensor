@@ -14,6 +14,75 @@ DOT_SHAPES = [((20, 11), (11, 4)), ((10, 3), (3, 1)), ((1, 10), (10, 5))]
 
 @pytest.mark.parametrize("format", ["csr", "csc"])
 @pytest.mark.parametrize("dtype", ["float32", "float64", "int32", "complex64"])
+def test_sampling_dot(format, dtype):
+    x = pt.matrix("x", dtype=dtype)
+    y = pt.matrix("y", dtype=dtype)
+    p = ps.matrix(format, name="p", dtype=dtype)
+    rng = np.random.default_rng(155)
+    x_test = rng.integers(-3, 4, size=(17, 11)).astype(dtype)
+    y_test = rng.integers(-3, 4, size=(13, 11)).astype(dtype)
+    p_test = scipy.sparse.random(
+        17, 13, density=0.2, format=format, dtype=dtype, random_state=rng
+    )
+    if dtype == "int32":
+        p_test.data[:] = rng.integers(-3, 4, size=p_test.nnz)
+
+    compare_numba_and_py_sparse(
+        [x, y, p], ps.sampling_dot(x, y, p), [x_test, y_test, p_test]
+    )
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_sampling_dot_zeros_and_duplicates(format):
+    x = pt.matrix("x")
+    y = pt.matrix("y")
+    p = ps.matrix(format, name="p")
+    constructor = (
+        scipy.sparse.csr_matrix if format == "csr" else scipy.sparse.csc_matrix
+    )
+    p_test = constructor(
+        ([2.0, -2.0, 0.0, 3.0], [2, 2, 0, 1], [0, 3, 4, 4, 4]),
+        shape=(4, 4),
+    )
+    x_test = np.array([[1.0, 2.0], [0.0, 0.0], [3.0, 4.0], [5.0, 6.0]])
+    y_test = np.array([[2.0, 1.0], [1.0, 3.0], [0.0, 0.0], [4.0, 2.0]])
+
+    compare_numba_and_py_sparse(
+        [x, y, p], ps.sampling_dot(x, y, p), [x_test, y_test, p_test]
+    )
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_sampling_dot_negative_strides(format):
+    x = pt.matrix("x")
+    y = pt.matrix("y")
+    p = ps.matrix(format, name="p")
+    rng = np.random.default_rng(155)
+    x_test = rng.normal(size=(10, 7))[::-1]
+    y_test = rng.normal(size=(12, 7))[:, ::-1]
+    p_test = scipy.sparse.random(10, 12, density=0.2, format=format, random_state=rng)
+
+    compare_numba_and_py_sparse(
+        [x, y, p], ps.sampling_dot(x, y, p), [x_test, y_test, p_test]
+    )
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_sampling_dot_grad(format):
+    x = pt.matrix("x", shape=(9, 7))
+    y = pt.matrix("y", shape=(8, 7))
+    p = ps.matrix(format, name="p", shape=(9, 8))
+    grads = pt.grad(ps.sp_sum(ps.sampling_dot(x, y, p)), [x, y])
+    rng = np.random.default_rng(155)
+    x_test = rng.normal(size=(9, 7))
+    y_test = rng.normal(size=(8, 7))
+    p_test = scipy.sparse.random(9, 8, density=0.3, format=format, random_state=rng)
+
+    compare_numba_and_py_sparse([x, y, p], grads, [x_test, y_test, p_test])
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+@pytest.mark.parametrize("dtype", ["float32", "float64", "int32", "complex64"])
 def test_structured_add_sparse_vector(format, dtype):
     x = ps.matrix(format, name="x", dtype=dtype)
     y = pt.vector("y", dtype=dtype)

@@ -14,6 +14,7 @@ from pytensor.sparse import (
     AddSS,
     AddSSData,
     Dot,
+    SamplingDot,
     SparseDenseMultiply,
     SparseDenseVectorMultiply,
     SparseSparseMultiply,
@@ -34,6 +35,82 @@ def numba_funcify_SpSum(op, node, **kwargs):
         return x.sum(axis)
 
     return perform
+
+
+@register_funcify_default_op_cache_key(SamplingDot)
+def numba_funcify_SamplingDot(op, node, **kwargs):
+    format = node.outputs[0].type.format
+    out_dtype = node.outputs[0].type.dtype
+    out_type = np.dtype(out_dtype).type
+    x_dtype = node.inputs[0].type.dtype
+    y_dtype = node.inputs[1].type.dtype
+    integer_dot = np.issubdtype(np.dtype(x_dtype), np.integer) and np.issubdtype(
+        np.dtype(y_dtype), np.integer
+    )
+    dot_type = np.result_type(x_dtype, y_dtype).type
+
+    @numba_basic.numba_njit
+    def sampling_dot(x, y, p):
+        assert x.shape[1] == y.shape[1]
+        assert p.shape == (x.shape[0], y.shape[0])
+        x_rows = np.ascontiguousarray(x)
+        y_rows = np.ascontiguousarray(y)
+        if format == "csr":
+            n_major, n_minor = p.shape
+        else:
+            n_minor, n_major = p.shape
+
+        p_data = p.data
+        p_ind = p.indices.view(np.uint32)
+        p_ptr = p.indptr.view(np.uint32)
+        z_data = np.empty(len(p_data), dtype=out_dtype)
+        z_indices = np.empty(len(p_data), dtype=np.uint32)
+        z_indptr = np.empty(n_major + 1, dtype=np.uint32)
+
+        mask = np.full(n_minor, -1, dtype=np.int32)
+        touched = np.empty(n_minor, dtype=np.uint32)
+        values = np.empty(n_minor, dtype=out_dtype)
+
+        nnz = 0
+        z_indptr[0] = 0
+        for i in range(n_major):
+            n_touched = 0
+            for k in range(p_ptr[i], p_ptr[i + 1]):
+                j = p_ind[k]
+                if mask[j] != i:
+                    mask[j] = i
+                    touched[n_touched] = j
+                    n_touched += 1
+                    values[j] = p_data[k]
+                else:
+                    values[j] += p_data[k]
+
+            for j in np.sort(touched[:n_touched]):
+                if format == "csr":
+                    row_x, row_y = i, j
+                else:
+                    row_x, row_y = j, i
+                if integer_dot:
+                    dot_value = dot_type(0)
+                    for k in range(x.shape[1]):
+                        dot_value += x_rows[row_x, k] * y_rows[row_y, k]
+                else:
+                    dot_value = np.dot(x_rows[row_x], y_rows[row_y])
+                z_indices[nnz] = j
+                z_data[nnz] = out_type(values[j] * dot_value)
+                nnz += 1
+            z_indptr[i + 1] = nnz
+
+        components = (
+            z_data[:nnz],
+            z_indices[:nnz].view(np.int32),
+            z_indptr.view(np.int32),
+        )
+        if format == "csr":
+            return sp.csr_matrix(components, shape=p.shape)
+        return sp.csc_matrix(components, shape=p.shape)
+
+    return sampling_dot
 
 
 @register_funcify_default_op_cache_key(AddSSData)
