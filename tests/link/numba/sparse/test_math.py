@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 import scipy
@@ -10,6 +12,107 @@ from tests.link.numba.sparse.test_basic import compare_numba_and_py_sparse
 pytestmark = pytest.mark.filterwarnings("error")
 
 DOT_SHAPES = [((20, 11), (11, 4)), ((10, 3), (3, 1)), ((1, 10), (10, 5))]
+
+
+class TestComparisons:
+    def _comparison_values(self, format):
+        x_dense = np.zeros((11, 7))
+        x_dense[0, 1] = 2
+        x_dense[3, 4] = -1
+        x_dense[7, 2] = 3
+        x_test = scipy.sparse.csr_matrix(x_dense).asformat(format)
+
+        y_dense = np.zeros((11, 7))
+        y_dense[0, 1] = 2
+        y_dense[5, 0] = 4
+        y_dense[7, 2] = -2
+        y_sparse_test = scipy.sparse.csr_matrix(y_dense).asformat(format)
+
+        rng = np.random.default_rng(155)
+        y_dense_test = rng.integers(-2, 3, size=(11, 7)).astype("float64")
+        y_dense_test[0, 1] = 2
+        return x_test, y_sparse_test, y_dense_test
+
+    @pytest.mark.parametrize("comparison", ["eq", "neq", "lt", "gt", "le", "ge"])
+    @pytest.mark.parametrize("format", ["csr", "csc"])
+    def test_sparse_sparse_comparison(self, comparison, format):
+        x = ps.matrix(format, name="x")
+        y = ps.matrix(format, name="y")
+        x_test, y_test, _ = self._comparison_values(format)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Comparing two sparse matrices using",
+                category=scipy.sparse.SparseEfficiencyWarning,
+            )
+            compare_numba_and_py_sparse(
+                [x, y], getattr(ps, comparison)(x, y), [x_test, y_test]
+            )
+
+    @pytest.mark.parametrize("comparison", ["eq", "neq", "lt", "gt", "le", "ge"])
+    @pytest.mark.parametrize("format", ["csr", "csc"])
+    def test_sparse_dense_comparison(self, comparison, format):
+        x = ps.matrix(format, name="x")
+        y = pt.matrix("y")
+        x_test, _, y_test = self._comparison_values(format)
+        compare_numba_and_py_sparse(
+            [x, y], getattr(ps, comparison)(x, y), [x_test, y_test]
+        )
+
+    @pytest.mark.parametrize("comparison", ["eq", "neq", "lt", "gt", "le", "ge"])
+    @pytest.mark.parametrize("format", ["csr", "csc"])
+    def test_dense_sparse_comparison(self, comparison, format):
+        x = pt.matrix("x")
+        y = ps.matrix(format, name="y")
+        y_test, _, x_test = self._comparison_values(format)
+        compare_numba_and_py_sparse(
+            [x, y], getattr(ps, comparison)(x, y), [x_test, y_test]
+        )
+
+    def _noncanonical_comparison_values(self, format):
+        constructor = (
+            scipy.sparse.csr_matrix if format == "csr" else scipy.sparse.csc_matrix
+        )
+        x_test = constructor(
+            ([2.0, 3.0, -2.0, 0.0, 4.0], [3, 1, 3, 0, 2], [0, 4, 5] + [5] * 6),
+            shape=(8, 8),
+        )
+        y_sparse_test = constructor(
+            ([1.0, -1.0, 2.0, 0.0], [3, 3, 1, 0], [0, 3, 4] + [4] * 6),
+            shape=(8, 8),
+        )
+        y_dense_test = np.zeros((8, 8))
+        y_dense_test[0, 1] = 3
+        y_dense_test[1, 2] = -1
+        return x_test, y_sparse_test, y_dense_test
+
+    @pytest.mark.parametrize("comparison", ["eq", "neq", "lt", "gt", "le", "ge"])
+    @pytest.mark.parametrize("format", ["csr", "csc"])
+    def test_sparse_sparse_comparison_noncanonical(self, comparison, format):
+        x = ps.matrix(format, name="x")
+        y = ps.matrix(format, name="y")
+        x_test, y_test, _ = self._noncanonical_comparison_values(format)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="Comparing two sparse matrices using",
+                category=scipy.sparse.SparseEfficiencyWarning,
+            )
+            compare_numba_and_py_sparse(
+                [x, y], getattr(ps, comparison)(x, y), [x_test, y_test]
+            )
+
+    @pytest.mark.parametrize("comparison", ["eq", "neq", "lt", "gt", "le", "ge"])
+    @pytest.mark.parametrize("format", ["csr", "csc"])
+    def test_sparse_dense_comparison_noncanonical(self, comparison, format):
+        x = ps.matrix(format, name="x")
+        y = pt.matrix("y")
+        x_test, _, y_test = self._noncanonical_comparison_values(format)
+        compare_numba_and_py_sparse(
+            [x, y], getattr(ps, comparison)(x, y), [x_test, y_test]
+        )
 
 
 @pytest.mark.parametrize("format", ["csr", "csc"])

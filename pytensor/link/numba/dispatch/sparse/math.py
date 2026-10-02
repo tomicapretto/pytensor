@@ -1,3 +1,4 @@
+import operator
 from hashlib import sha256
 
 import numpy as np
@@ -14,6 +15,18 @@ from pytensor.sparse import (
     AddSS,
     AddSSData,
     Dot,
+    EqualSD,
+    EqualSS,
+    GreaterEqualSD,
+    GreaterEqualSS,
+    GreaterThanSD,
+    GreaterThanSS,
+    LessEqualSD,
+    LessEqualSS,
+    LessThanSD,
+    LessThanSS,
+    NotEqualSD,
+    NotEqualSS,
     SamplingDot,
     SparseDenseMultiply,
     SparseDenseVectorMultiply,
@@ -24,6 +37,165 @@ from pytensor.sparse import (
     StructuredDotGradCSC,
     StructuredDotGradCSR,
 )
+
+
+@register_funcify_default_op_cache_key(EqualSS)
+@register_funcify_default_op_cache_key(NotEqualSS)
+@register_funcify_default_op_cache_key(LessThanSS)
+@register_funcify_default_op_cache_key(GreaterThanSS)
+@register_funcify_default_op_cache_key(LessEqualSS)
+@register_funcify_default_op_cache_key(GreaterEqualSS)
+@register_funcify_default_op_cache_key(EqualSD)
+@register_funcify_default_op_cache_key(NotEqualSD)
+@register_funcify_default_op_cache_key(LessThanSD)
+@register_funcify_default_op_cache_key(GreaterThanSD)
+@register_funcify_default_op_cache_key(LessEqualSD)
+@register_funcify_default_op_cache_key(GreaterEqualSD)
+def numba_funcify_SparseComparison(op, node, **kwargs):
+    comparisons = {
+        EqualSS: operator.eq,
+        NotEqualSS: operator.ne,
+        LessThanSS: operator.lt,
+        GreaterThanSS: operator.gt,
+        LessEqualSS: operator.le,
+        GreaterEqualSS: operator.ge,
+        EqualSD: operator.eq,
+        NotEqualSD: operator.ne,
+        LessThanSD: operator.lt,
+        GreaterThanSD: operator.gt,
+        LessEqualSD: operator.le,
+        GreaterEqualSD: operator.ge,
+    }
+    comparison = comparisons[type(op)]
+
+    format = node.inputs[0].type.format
+    x_zero = np.dtype(node.inputs[0].type.dtype).type(0)
+
+    ss_ops = (
+        EqualSS,
+        NotEqualSS,
+        LessThanSS,
+        GreaterThanSS,
+        LessEqualSS,
+        GreaterEqualSS,
+    )
+    if isinstance(op, ss_ops):
+        y_zero = np.dtype(node.inputs[1].type.dtype).type(0)
+        default_true = comparison(x_zero, y_zero)
+
+        @numba_basic.numba_njit
+        def compare_sparse_sparse(x, y):
+            assert x.shape == y.shape
+            if format == "csr":
+                n_major, n_minor = x.shape
+            else:
+                n_minor, n_major = x.shape
+
+            x_data = x.data
+            y_data = y.data
+            x_ind = x.indices.view(np.uint32)
+            y_ind = y.indices.view(np.uint32)
+            x_ptr = x.indptr.view(np.uint32)
+            y_ptr = y.indptr.view(np.uint32)
+
+            max_nnz = n_major * n_minor if default_true else len(x_data) + len(y_data)
+            z_data = np.empty(max_nnz, dtype=np.uint8)
+            z_indices = np.empty(max_nnz, dtype=np.uint32)
+            z_indptr = np.empty(n_major + 1, dtype=np.uint32)
+
+            x_mask = np.full(n_minor, -1, dtype=np.int32)
+            y_mask = np.full(n_minor, -1, dtype=np.int32)
+            touched = np.empty(n_minor, dtype=np.uint32)
+            x_values = np.empty(n_minor, dtype=x_data.dtype)
+            y_values = np.empty(n_minor, dtype=y_data.dtype)
+
+            nnz = 0
+            z_indptr[0] = 0
+            for i in range(n_major):
+                n_touched = 0
+                for k in range(x_ptr[i], x_ptr[i + 1]):
+                    j = x_ind[k]
+                    if x_mask[j] != i:
+                        x_mask[j] = i
+                        touched[n_touched] = j
+                        n_touched += 1
+                        x_values[j] = x_data[k]
+                    else:
+                        x_values[j] += x_data[k]
+
+                for k in range(y_ptr[i], y_ptr[i + 1]):
+                    j = y_ind[k]
+                    if y_mask[j] != i:
+                        y_mask[j] = i
+                        if x_mask[j] != i:
+                            touched[n_touched] = j
+                            n_touched += 1
+                        y_values[j] = y_data[k]
+                    else:
+                        y_values[j] += y_data[k]
+
+                if default_true:
+                    for j in range(n_minor):
+                        x_value = x_values[j] if x_mask[j] == i else x_zero
+                        y_value = y_values[j] if y_mask[j] == i else y_zero
+                        if comparison(x_value, y_value):
+                            z_data[nnz] = 1
+                            z_indices[nnz] = j
+                            nnz += 1
+                else:
+                    for j in np.sort(touched[:n_touched]):
+                        x_value = x_values[j] if x_mask[j] == i else x_zero
+                        y_value = y_values[j] if y_mask[j] == i else y_zero
+                        if comparison(x_value, y_value):
+                            z_data[nnz] = 1
+                            z_indices[nnz] = j
+                            nnz += 1
+                z_indptr[i + 1] = nnz
+
+            components = (
+                z_data[:nnz],
+                z_indices[:nnz].view(np.int32),
+                z_indptr.view(np.int32),
+            )
+            if format == "csr":
+                return sp.csr_matrix(components, shape=x.shape)
+            return sp.csc_matrix(components, shape=x.shape)
+
+        return compare_sparse_sparse
+
+    @numba_basic.numba_njit
+    def compare_sparse_dense(x, y):
+        assert x.shape == y.shape
+        if format == "csr":
+            n_major, n_minor = x.shape
+        else:
+            n_minor, n_major = x.shape
+
+        x_data = x.data
+        x_ind = x.indices.view(np.uint32)
+        x_ptr = x.indptr.view(np.uint32)
+        z = np.empty(x.shape, dtype=np.uint8)
+        x_mask = np.full(n_minor, -1, dtype=np.int32)
+        x_values = np.empty(n_minor, dtype=x_data.dtype)
+
+        for i in range(n_major):
+            for k in range(x_ptr[i], x_ptr[i + 1]):
+                j = x_ind[k]
+                if x_mask[j] != i:
+                    x_mask[j] = i
+                    x_values[j] = x_data[k]
+                else:
+                    x_values[j] += x_data[k]
+
+            for j in range(n_minor):
+                x_value = x_values[j] if x_mask[j] == i else x_zero
+                if format == "csr":
+                    z[i, j] = comparison(x_value, y[i, j])
+                else:
+                    z[j, i] = comparison(x_value, y[j, i])
+        return z
+
+    return compare_sparse_dense
 
 
 @register_funcify_default_op_cache_key(SpSum)
