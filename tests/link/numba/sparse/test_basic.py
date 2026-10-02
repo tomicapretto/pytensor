@@ -253,6 +253,60 @@ def test_csm_grad_in_graph(format):
     )
 
 
+@pytest.mark.parametrize("format", ["csr", "csc"])
+@pytest.mark.parametrize("inplace", [False, True])
+@pytest.mark.parametrize("dtype", ["float64", "int32", "complex64"])
+def test_sparse_remove0(format, inplace, dtype):
+    x = ps.matrix(format, name="x", dtype=dtype)
+    constructor = sp.sparse.csr_matrix if format == "csr" else sp.sparse.csc_matrix
+    n_major = 13 if format == "csr" else 17
+    x_test = constructor(
+        (
+            np.array([4, 0, 2, 0, 3, 0], dtype=dtype),
+            [7, 2, 5, 1, 3, 0],
+            [0, 3, 5, 6] + [6] * (n_major - 3),
+        ),
+        shape=(13, 17),
+    )
+
+    compare_numba_and_py_sparse(
+        [x], ps.Remove0(inplace=inplace)(x), [x_test], inplace=inplace
+    )
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+@pytest.mark.parametrize("inplace", [False, True])
+def test_sparse_ensure_sorted_indices(format, inplace):
+    x = ps.matrix(format, name="x")
+    constructor = sp.sparse.csr_matrix if format == "csr" else sp.sparse.csc_matrix
+    n_major = 13 if format == "csr" else 17
+    x_test = constructor(
+        (
+            [4.0, 0.0, 2.0, 6.0, 3.0, 5.0],
+            [7, 2, 7, 5, 3, 1],
+            [0, 4, 6] + [6] * (n_major - 2),
+        ),
+        shape=(13, 17),
+    )
+
+    compare_numba_and_py_sparse(
+        [x], ps.EnsureSortedIndices(inplace=inplace)(x), [x_test], inplace=inplace
+    )
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_sparse_clean(format):
+    x = ps.matrix(format, name="x")
+    constructor = sp.sparse.csr_matrix if format == "csr" else sp.sparse.csc_matrix
+    n_major = 13 if format == "csr" else 17
+    x_test = constructor(
+        ([4.0, 0.0, 2.0, 3.0, 0.0], [7, 2, 5, 3, 1], [0, 3, 5] + [5] * (n_major - 2)),
+        shape=(13, 17),
+    )
+
+    compare_numba_and_py_sparse([x], ps.clean(x), [x_test])
+
+
 @pytest.mark.parametrize("cache", [True, False])
 @pytest.mark.parametrize("format", ["csr", "csc"])
 def test_sparse_constant(format, cache):

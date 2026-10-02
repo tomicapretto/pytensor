@@ -1501,7 +1501,8 @@ class EnsureSortedIndices(Op):
         (x,) = inputs
         (z,) = outputs
         if self.inplace:
-            z[0] = x.sort_indices()
+            x.sort_indices()
+            z[0] = x
         else:
             z[0] = x.sorted_indices()
 

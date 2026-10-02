@@ -19,6 +19,7 @@ from pytensor.sparse import (
     CSMProperties,
     DenseFromSparse,
     Diag,
+    EnsureSortedIndices,
     GetItem2d,
     GetItem2Lists,
     GetItem2ListsGrad,
@@ -26,6 +27,7 @@ from pytensor.sparse import (
     GetItemListGrad,
     GetItemScalar,
     HStack,
+    Remove0,
     RowScaleCSC,
     SparseFromDense,
     Transpose,
@@ -99,6 +101,74 @@ def numba_funcify_CSMGrad(op, node, **kwargs):
         return gout_data
 
     return csm_grad
+
+
+@register_funcify_default_op_cache_key(Remove0)
+def numba_funcify_Remove0(op, node, **kwargs):
+    format = node.outputs[0].type.format
+
+    @numba_basic.numba_njit
+    def remove0(x):
+        x_data = x.data
+        x_indices = x.indices.view(np.uint32)
+        x_indptr = x.indptr.view(np.uint32)
+        n_major = len(x_indptr) - 1
+        data = np.empty(len(x_data), dtype=x_data.dtype)
+        indices = np.empty(len(x_indices), dtype=np.uint32)
+        indptr = np.empty(n_major + 1, dtype=np.uint32)
+
+        nnz = 0
+        indptr[0] = 0
+        for i in range(n_major):
+            for k in range(x_indptr[i], x_indptr[i + 1]):
+                value = x_data[k]
+                if value != 0:
+                    data[nnz] = value
+                    indices[nnz] = x_indices[k]
+                    nnz += 1
+            indptr[i + 1] = nnz
+
+        components = (
+            data[:nnz],
+            indices[:nnz].view(np.int32),
+            indptr.view(np.int32),
+        )
+        if format == "csr":
+            return sp.sparse.csr_matrix(components, shape=x.shape)
+        return sp.sparse.csc_matrix(components, shape=x.shape)
+
+    return remove0
+
+
+@register_funcify_default_op_cache_key(EnsureSortedIndices)
+def numba_funcify_EnsureSortedIndices(op, node, **kwargs):
+    inplace = op.inplace
+
+    @numba_basic.numba_njit
+    def ensure_sorted_indices(x):
+        if inplace:
+            z = x
+        else:
+            z = x.copy()
+
+        data = z.data
+        indices = z.indices.view(np.uint32)
+        indptr = z.indptr.view(np.uint32)
+        for i in range(len(indptr) - 1):
+            start = indptr[i]
+            end = indptr[i + 1]
+            sorted = True
+            for k in range(start + 1, end):
+                if indices[k] < indices[k - 1]:
+                    sorted = False
+                    break
+            if not sorted:
+                order = np.argsort(indices[start:end])
+                data[start:end] = data[start:end][order]
+                indices[start:end] = indices[start:end][order]
+        return z
+
+    return ensure_sorted_indices
 
 
 @register_funcify_default_op_cache_key(Cast)
