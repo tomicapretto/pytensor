@@ -15,6 +15,7 @@ from pytensor.sparse import (
     CSM,
     Cast,
     ColScaleCSC,
+    CSMGrad,
     CSMProperties,
     DenseFromSparse,
     Diag,
@@ -67,6 +68,37 @@ def numba_funcify_CSM(op, node, **kwargs):
             return sp.sparse.csc_matrix(constructor_arg, shape=shape_arg)
 
     return csm_constructor
+
+
+@register_funcify_default_op_cache_key(CSMGrad)
+def numba_funcify_CSMGrad(op, node, **kwargs):
+    out_dtype = node.outputs[0].type.dtype
+
+    @numba_basic.numba_njit
+    def csm_grad(
+        x_data, x_indices, x_indptr, x_shape, g_data, g_indices, g_indptr, g_shape
+    ):
+        if len(x_indptr) - 1 == x_shape[0]:
+            sp_dim = x_shape[1]
+        else:
+            sp_dim = x_shape[0]
+
+        g_row = np.zeros(sp_dim, dtype=g_data.dtype)
+        gout_data = np.zeros(x_data.shape, dtype=out_dtype)
+
+        for i in range(len(x_indptr) - 1):
+            for j_ptr in range(g_indptr[i], g_indptr[i + 1]):
+                g_row[g_indices[j_ptr]] += g_data[j_ptr]
+
+            for j_ptr in range(x_indptr[i], x_indptr[i + 1]):
+                gout_data[j_ptr] = g_row[x_indices[j_ptr]]
+
+            for j_ptr in range(g_indptr[i], g_indptr[i + 1]):
+                g_row[g_indices[j_ptr]] = 0
+
+        return gout_data
+
+    return csm_grad
 
 
 @register_funcify_default_op_cache_key(Cast)

@@ -193,6 +193,66 @@ def test_sparse_constructor(func):
     assert out_pt.indptr is inp.indptr
 
 
+@pytest.mark.parametrize("format", ["csr", "csc"])
+@pytest.mark.parametrize("dtype", ["float32", "float64", "complex64"])
+def test_csm_grad(format, dtype):
+    x_data = pt.vector("x_data", dtype=dtype)
+    x_indices = pt.ivector("x_indices")
+    x_indptr = pt.ivector("x_indptr")
+    x_shape = pt.ivector("x_shape")
+    g_data = pt.vector("g_data", dtype=dtype)
+    g_indices = pt.ivector("g_indices")
+    g_indptr = pt.ivector("g_indptr")
+    g_shape = pt.ivector("g_shape")
+    inputs = [
+        x_data,
+        x_indices,
+        x_indptr,
+        x_shape,
+        g_data,
+        g_indices,
+        g_indptr,
+        g_shape,
+    ]
+    n_major = 7 if format == "csr" else 9
+    shape = np.array([7, 9], dtype="int32")
+    values = [
+        np.array([1, 2, 3, 4, 5], dtype=dtype),
+        np.array([3, 1, 3, 5, 2], dtype="int32"),
+        np.array([0, 3, 4, 5] + [5] * (n_major - 2), dtype="int32"),
+        shape,
+        np.array([2, 3, 4, 5], dtype=dtype),
+        np.array([3, 3, 1, 4], dtype="int32"),
+        np.array([0, 3, 3, 4] + [4] * (n_major - 2), dtype="int32"),
+        shape,
+    ]
+
+    compare_numba_and_py_sparse(inputs, ps.CSMGrad()(*inputs), values)
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_csm_grad_in_graph(format):
+    data = pt.vector("data")
+    indices = pt.ivector("indices")
+    indptr = pt.ivector("indptr")
+    shape = pt.ivector("shape")
+    matrix = ps.CSM(format)(data, indices, indptr, shape)
+    grad = pt.grad(ps.sp_sum(matrix), data)
+    rng = np.random.default_rng(155)
+    matrix_test = sp.sparse.random(11, 13, density=0.2, format=format, random_state=rng)
+
+    compare_numba_and_py_sparse(
+        [data, indices, indptr, shape],
+        grad,
+        [
+            matrix_test.data,
+            matrix_test.indices,
+            matrix_test.indptr,
+            np.array(matrix_test.shape, dtype="int32"),
+        ],
+    )
+
+
 @pytest.mark.parametrize("cache", [True, False])
 @pytest.mark.parametrize("format", ["csr", "csc"])
 def test_sparse_constant(format, cache):
