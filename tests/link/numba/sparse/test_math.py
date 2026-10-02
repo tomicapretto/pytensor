@@ -13,6 +13,48 @@ DOT_SHAPES = [((20, 11), (11, 4)), ((10, 3), (3, 1)), ((1, 10), (10, 5))]
 
 
 @pytest.mark.parametrize("format", ["csr", "csc"])
+@pytest.mark.parametrize("dtype", ["float32", "float64", "int32", "complex64"])
+def test_structured_add_sparse_vector(format, dtype):
+    x = ps.matrix(format, name="x", dtype=dtype)
+    y = pt.vector("y", dtype=dtype)
+    rng = np.random.default_rng(155)
+    x_test = scipy.sparse.random(
+        19, 13, density=0.5, format=format, dtype=dtype, random_state=rng
+    )
+    y_test = rng.normal(size=13).astype(dtype)
+
+    compare_numba_and_py_sparse([x, y], ps.structured_add_s_v(x, y), [x_test, y_test])
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_structured_add_sparse_vector_zeros(format):
+    x = ps.matrix(format, name="x")
+    y = pt.vector("y")
+    constructor = (
+        scipy.sparse.csr_matrix if format == "csr" else scipy.sparse.csc_matrix
+    )
+    x_test = constructor(
+        ([2.0, -2.0, 0.0, 3.0, 4.0], [2, 2, 0, 1, 1], [0, 4, 5, 5, 5, 5, 5, 5, 5]),
+        shape=(8, 8),
+    )
+    y_test = np.array([1.0, -3.0, 0.0, 2.0, 1.0, -1.0, 2.0, 3.0])
+
+    compare_numba_and_py_sparse([x, y], ps.structured_add_s_v(x, y), [x_test, y_test])
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_structured_add_sparse_vector_grad(format):
+    x = ps.matrix(format, name="x", shape=(19, 13))
+    y = pt.vector("y", shape=(13,))
+    grads = pt.grad(ps.sp_sum(ps.structured_add_s_v(x, y)), [x, y])
+    rng = np.random.default_rng(155)
+    x_test = scipy.sparse.random(19, 13, density=0.5, format=format, random_state=rng)
+    y_test = rng.normal(size=13)
+
+    compare_numba_and_py_sparse([x, y], grads, [x_test, y_test])
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
 @pytest.mark.parametrize("dtype", ["float64", "int32", "complex64"])
 def test_sparse_sparse_add_data(format, dtype):
     x = ps.matrix(format, name="x", dtype=dtype)

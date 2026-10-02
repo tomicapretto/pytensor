@@ -18,6 +18,7 @@ from pytensor.sparse import (
     SparseDenseVectorMultiply,
     SparseSparseMultiply,
     SpSum,
+    StructuredAddSV,
     StructuredDot,
     StructuredDotGradCSC,
     StructuredDotGradCSR,
@@ -47,6 +48,69 @@ def numba_funcify_AddSSData(op, node, **kwargs):
         return z
 
     return add_data
+
+
+@register_funcify_default_op_cache_key(StructuredAddSV)
+def numba_funcify_StructuredAddSV(op, node, **kwargs):
+    format = node.outputs[0].type.format
+    out_dtype = node.outputs[0].type.dtype
+
+    @numba_basic.numba_njit
+    def structured_add(x, y):
+        assert x.shape[1] == y.shape[0]
+        if format == "csr":
+            n_major, n_minor = x.shape
+        else:
+            n_minor, n_major = x.shape
+
+        x_data = x.data
+        x_ind = x.indices.view(np.uint32)
+        x_ptr = x.indptr.view(np.uint32)
+        z_data = np.empty(len(x_data), dtype=out_dtype)
+        z_indices = np.empty(len(x_data), dtype=np.uint32)
+        z_indptr = np.empty(n_major + 1, dtype=np.uint32)
+
+        mask = np.full(n_minor, -1, dtype=np.int32)
+        touched = np.empty(n_minor, dtype=np.uint32)
+        values = np.empty(n_minor, dtype=out_dtype)
+
+        nnz = 0
+        z_indptr[0] = 0
+        for i in range(n_major):
+            n_touched = 0
+            for k in range(x_ptr[i], x_ptr[i + 1]):
+                j = x_ind[k]
+                if mask[j] != i:
+                    mask[j] = i
+                    touched[n_touched] = j
+                    n_touched += 1
+                    values[j] = x_data[k]
+                else:
+                    values[j] += x_data[k]
+
+            for j in np.sort(touched[:n_touched]):
+                value = values[j]
+                if value != 0:
+                    if format == "csr":
+                        value += y[j]
+                    else:
+                        value += y[i]
+                    if value != 0:
+                        z_indices[nnz] = j
+                        z_data[nnz] = value
+                        nnz += 1
+            z_indptr[i + 1] = nnz
+
+        components = (
+            z_data[:nnz],
+            z_indices[:nnz].view(np.int32),
+            z_indptr.view(np.int32),
+        )
+        if format == "csr":
+            return sp.csr_matrix(components, shape=x.shape)
+        return sp.csc_matrix(components, shape=x.shape)
+
+    return structured_add
 
 
 @register_funcify_default_op_cache_key(AddSS)
