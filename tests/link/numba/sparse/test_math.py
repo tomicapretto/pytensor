@@ -12,6 +12,42 @@ pytestmark = pytest.mark.filterwarnings("error")
 DOT_SHAPES = [((20, 11), (11, 4)), ((10, 3), (3, 1)), ((1, 10), (10, 5))]
 
 
+@pytest.mark.parametrize("x_format", ["csr", "csc"])
+@pytest.mark.parametrize("y_format", ["csr", "csc"])
+@pytest.mark.parametrize(
+    "x_dtype, y_dtype",
+    [
+        ("float64", "float64"),
+        ("int32", "float32"),
+        ("float32", "complex64"),
+    ],
+)
+def test_sparse_sparse_multiply(x_format, y_format, x_dtype, y_dtype):
+    x = ps.matrix(x_format, name="x", dtype=x_dtype)
+    y = ps.matrix(y_format, name="y", dtype=y_dtype)
+    rng = np.random.default_rng(155)
+    x_test = scipy.sparse.random(
+        7, 5, density=0.5, format=x_format, dtype=x_dtype, random_state=rng
+    )
+    y_test = scipy.sparse.random(
+        7, 5, density=0.5, format=y_format, dtype=y_dtype, random_state=rng
+    )
+
+    compare_numba_and_py_sparse([x, y], x * y, [x_test, y_test])
+
+
+@pytest.mark.parametrize("x_format", ["csr", "csc"])
+@pytest.mark.parametrize("y_format", ["csr", "csc"])
+def test_sparse_sparse_multiply_grad(x_format, y_format):
+    x = ps.matrix(x_format, name="x", dtype="float64", shape=(7, 5))
+    y = ps.matrix(y_format, name="y", dtype="float64", shape=(7, 5))
+    grads = pt.grad(ps.sp_sum(x * y), [x, y])
+    rng = np.random.default_rng(155)
+    x_test = scipy.sparse.random(7, 5, density=0.5, format=x_format, random_state=rng)
+    y_test = scipy.sparse.random(7, 5, density=0.5, format=y_format, random_state=rng)
+    compare_numba_and_py_sparse([x, y], grads, [x_test, y_test])
+
+
 @pytest.mark.parametrize("format", ["csr", "csc"])
 @pytest.mark.parametrize("y_ndim", [0, 1, 2])
 def test_sparse_dense_multiply(y_ndim, format):
