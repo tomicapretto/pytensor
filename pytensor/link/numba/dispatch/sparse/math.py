@@ -11,6 +11,8 @@ from pytensor.link.numba.dispatch.basic import (
     register_funcify_default_op_cache_key,
 )
 from pytensor.sparse import (
+    AddSS,
+    AddSSData,
     Dot,
     SparseDenseMultiply,
     SparseDenseVectorMultiply,
@@ -31,6 +33,111 @@ def numba_funcify_SpSum(op, node, **kwargs):
         return x.sum(axis)
 
     return perform
+
+
+@register_funcify_default_op_cache_key(AddSSData)
+def numba_funcify_AddSSData(op, node, **kwargs):
+    @numba_basic.numba_njit
+    def add_data(x, y):
+        assert x.shape == y.shape
+        assert x.data.shape == y.data.shape
+        z = x.copy()
+        z_data = z.data
+        z_data += y.data
+        return z
+
+    return add_data
+
+
+@register_funcify_default_op_cache_key(AddSS)
+def numba_funcify_AddSS(op, node, **kwargs):
+    [z] = node.outputs
+    format = z.type.format
+    out_dtype = z.type.dtype
+    out_type = np.dtype(out_dtype).type
+    y_format = node.inputs[1].type.format
+
+    @numba_basic.numba_njit
+    def add_aligned(x, y):
+        assert x.shape == y.shape
+        if format == "csr":
+            n_major, n_minor = x.shape
+        else:
+            n_minor, n_major = x.shape
+
+        x_data = x.data
+        y_data = y.data
+        x_ind = x.indices.view(np.uint32)
+        y_ind = y.indices.view(np.uint32)
+        x_ptr = x.indptr.view(np.uint32)
+        y_ptr = y.indptr.view(np.uint32)
+
+        max_nnz = len(x_data) + len(y_data)
+        z_data = np.empty(max_nnz, dtype=out_dtype)
+        z_indices = np.empty(max_nnz, dtype=np.uint32)
+        z_indptr = np.empty(n_major + 1, dtype=np.uint32)
+
+        mask = np.full(n_minor, -1, dtype=np.int32)
+        touched = np.empty(n_minor, dtype=np.uint32)
+        values = np.empty(n_minor, dtype=out_dtype)
+
+        nnz = 0
+        z_indptr[0] = 0
+        for i in range(n_major):
+            n_touched = 0
+            for k in range(x_ptr[i], x_ptr[i + 1]):
+                j = x_ind[k]
+                if mask[j] != i:
+                    mask[j] = i
+                    touched[n_touched] = j
+                    n_touched += 1
+                    values[j] = out_type(x_data[k])
+                else:
+                    values[j] += out_type(x_data[k])
+
+            for k in range(y_ptr[i], y_ptr[i + 1]):
+                j = y_ind[k]
+                if mask[j] != i:
+                    mask[j] = i
+                    touched[n_touched] = j
+                    n_touched += 1
+                    values[j] = out_type(y_data[k])
+                else:
+                    values[j] += out_type(y_data[k])
+
+            for j in np.sort(touched[:n_touched]):
+                value = values[j]
+                if value != 0:
+                    z_indices[nnz] = j
+                    z_data[nnz] = value
+                    nnz += 1
+            z_indptr[i + 1] = nnz
+
+        components = (
+            z_data[:nnz],
+            z_indices[:nnz].view(np.int32),
+            z_indptr.view(np.int32),
+        )
+        if format == "csr":
+            return sp.csr_matrix(components, shape=x.shape)
+        return sp.csc_matrix(components, shape=x.shape)
+
+    if format == y_format:
+        return add_aligned
+
+    if format == "csr":
+
+        @numba_basic.numba_njit
+        def add_csr_csc(x, y):
+            return add_aligned(x, y.tocsr())
+
+        return add_csr_csc
+
+    @numba_basic.numba_njit
+    def add_csc_csr(x, y):
+        return add_aligned(x, y.tocsc())
+
+    return add_csc_csr
 
 
 @register_funcify_default_op_cache_key(SparseSparseMultiply)

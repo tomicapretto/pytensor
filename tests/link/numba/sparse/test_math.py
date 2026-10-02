@@ -12,6 +12,92 @@ pytestmark = pytest.mark.filterwarnings("error")
 DOT_SHAPES = [((20, 11), (11, 4)), ((10, 3), (3, 1)), ((1, 10), (10, 5))]
 
 
+@pytest.mark.parametrize("format", ["csr", "csc"])
+@pytest.mark.parametrize("dtype", ["float64", "int32", "complex64"])
+def test_sparse_sparse_add_data(format, dtype):
+    x = ps.matrix(format, name="x", dtype=dtype)
+    y = ps.matrix(format, name="y", dtype=dtype)
+    constructor = (
+        scipy.sparse.csr_matrix if format == "csr" else scipy.sparse.csc_matrix
+    )
+    x_test = constructor(
+        (np.array([2, 3, 4], dtype=dtype), [2, 0, 1], [0, 2, 3, 3]),
+        shape=(3, 3),
+    )
+    y_test = x_test.copy()
+    y_test.data[:] = [-2, 5, -4]
+
+    compare_numba_and_py_sparse([x, y], ps.add_s_s_data(x, y), [x_test, y_test])
+
+
+@pytest.mark.parametrize("format", ["csr", "csc"])
+def test_sparse_sparse_add_data_grad(format):
+    x = ps.matrix(format, name="x", shape=(4, 6))
+    y = ps.matrix(format, name="y", shape=(4, 6))
+    grads = pt.grad(ps.sp_sum(ps.add_s_s_data(x, y)), [x, y])
+    rng = np.random.default_rng(155)
+    x_test = scipy.sparse.random(4, 6, density=0.5, format=format, random_state=rng)
+    y_test = x_test.copy()
+
+    compare_numba_and_py_sparse([x, y], grads, [x_test, y_test])
+
+
+@pytest.mark.parametrize("x_format", ["csr", "csc"])
+@pytest.mark.parametrize("y_format", ["csr", "csc"])
+@pytest.mark.parametrize(
+    "x_dtype, y_dtype",
+    [
+        ("float64", "float64"),
+        ("int32", "float32"),
+        ("float32", "complex64"),
+    ],
+)
+def test_sparse_sparse_add(x_format, y_format, x_dtype, y_dtype):
+    x = ps.matrix(x_format, name="x", dtype=x_dtype)
+    y = ps.matrix(y_format, name="y", dtype=y_dtype)
+    rng = np.random.default_rng(155)
+    x_test = scipy.sparse.random(
+        9, 4, density=0.5, format=x_format, dtype=x_dtype, random_state=rng
+    )
+    y_test = scipy.sparse.random(
+        9, 4, density=0.5, format=y_format, dtype=y_dtype, random_state=rng
+    )
+
+    compare_numba_and_py_sparse([x, y], x + y, [x_test, y_test])
+
+
+@pytest.mark.parametrize("x_format", ["csr", "csc"])
+@pytest.mark.parametrize("y_format", ["csr", "csc"])
+def test_sparse_sparse_add_cancellation(x_format, y_format):
+    x = ps.matrix(x_format, name="x")
+    y = ps.matrix(y_format, name="y")
+    x_constructor = (
+        scipy.sparse.csr_matrix if x_format == "csr" else scipy.sparse.csc_matrix
+    )
+    y_constructor = (
+        scipy.sparse.csr_matrix if y_format == "csr" else scipy.sparse.csc_matrix
+    )
+    x_test = x_constructor(
+        ([1.0, 2.0, 3.0, 4.0], [2, 0, 2, 1], [0, 3, 4, 4]), shape=(3, 3)
+    )
+    y_test = y_constructor(([-2.0, -3.0, 6.0], [2, 2, 0], [0, 2, 3, 3]), shape=(3, 3))
+
+    compare_numba_and_py_sparse([x, y], x + y, [x_test, y_test])
+
+
+@pytest.mark.parametrize("x_format", ["csr", "csc"])
+@pytest.mark.parametrize("y_format", ["csr", "csc"])
+def test_sparse_sparse_add_grad(x_format, y_format):
+    x = ps.matrix(x_format, name="x", shape=(9, 4))
+    y = ps.matrix(y_format, name="y", shape=(9, 4))
+    grads = pt.grad(ps.sp_sum(x + y), [x, y])
+    rng = np.random.default_rng(155)
+    x_test = scipy.sparse.random(9, 4, density=0.5, format=x_format, random_state=rng)
+    y_test = scipy.sparse.random(9, 4, density=0.5, format=y_format, random_state=rng)
+
+    compare_numba_and_py_sparse([x, y], grads, [x_test, y_test])
+
+
 @pytest.mark.parametrize("x_format", ["csr", "csc"])
 @pytest.mark.parametrize("y_format", ["csr", "csc"])
 @pytest.mark.parametrize(
